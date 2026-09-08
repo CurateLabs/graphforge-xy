@@ -13,6 +13,17 @@ in the README).
 
 ## [Unreleased]
 
+## [0.0.1a1] - 2026-09-08
+
+First experimental XYG distribution, based on the green-CI revision
+`c2f30dd813100ce22c7fb86061f893d1578cf08e`. Ships the Python composition API,
+Rust native engine, bundled offline browser client, and optional Reflex adapter.
+The initial binary wheel supports Linux x86-64 with glibc 2.39 or newer;
+other platforms require building the source distribution with Rust.
+Install explicitly with `pip install xyg==0.0.1a1`. APIs remain experimental.
+Existing benchmark evidence applies to the unchanged product source at this
+revision; no new performance claims accompany this packaging release.
+
 ### Added
 - ABI 60: Rust-owned canonical GraphForge identity/topology projection handles,
   including opaque node/edge UUIDs, dense endpoints, and optional parents.

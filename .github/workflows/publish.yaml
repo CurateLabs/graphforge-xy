@@ -1,750 +1,91 @@
-name: Release
+name: First PyPI alpha
 
-# Filename MUST stay publish.yaml: PyPI trusted publishing for project `xyg`
-# is bound to CurateLabs/xyg, this exact workflow filename, and environment
-# `pypi`. A rename would desync the pending publisher.
-#
-# Build and verify prebuilt wheels + sdist on a version tag. This is what
-# makes `pip install xyg` a no-toolchain install: each platform wheel carries
-# the compiled Rust core, so end users never see Rust or Node.
-#
-# Publish is tag/release-gated plus an explicit opt-in: a version tag builds
-# and verifies every artifact; the upload step runs only when
-# XYG_ALLOW_PYPI_PUBLISH is `true` and the dispatch is not a dry run.
-# workflow_dispatch defaults to dry_run=true so a manual run never publishes.
-# See spec/process/production-readiness.md § Fork release posture.
+# Branch-local bootstrap; this filename and environment bind the PyPI publisher.
 on:
   push:
-    tags: ["xyg-v*"]
+    tags: ["xyg-v0.0.1a1"]
   workflow_dispatch:
     inputs:
       dry_run:
-        description: >-
-          Dry run: build and verify every wheel/sdist/wasm artifact across the
-          full release matrix without publishing to PyPI. Use this to validate
-          the cross-compile matrix (musllinux, win-arm64, wasm, ...) before a
-          real version-tag release. Defaults to true so a manual dispatch
-          never accidentally publishes.
+        description: Build and verify without uploading
         type: boolean
         default: true
-
-# Limit build jobs to repository reads. The publish job declares its separate
-# OIDC-only token permissions below.
 permissions:
   contents: read
-
 jobs:
-  # One wheel per platform (the C-ABI core is CPython-version-independent, so
-  # each entry produces a single py3-none-<platform> wheel). Coverage matches
-  # what the native core can target: Linux glibc + musl across x86-64/aarch64/
-  # armv7, macOS x86-64/arm64, and Windows x86/x64/arm64. Linux targets are
-  # cross-compiled with cargo-zigbuild (musl support + a low manylinux_2_17
-  # glibc floor without QEMU); the hook then packs the prebuilt core and stamps
-  # the platform tag (XYG_CARGO_TARGET / XYG_WHEEL_PLATFORM).
-  wheels:
-    name: Wheel ${{ matrix.plat }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux glibc (manylinux_2_17 floor) — cross-compiled with zig.
-          - { os: blacksmith-4vcpu-ubuntu-2404, target: x86_64-unknown-linux-gnu, zigtarget: x86_64-unknown-linux-gnu.2.17, plat: manylinux_2_17_x86_64, zig: true, native: true }
-          - { os: blacksmith-4vcpu-ubuntu-2404, target: aarch64-unknown-linux-gnu, zigtarget: aarch64-unknown-linux-gnu.2.17, plat: manylinux_2_17_aarch64, zig: true, native: false }
-          - { os: blacksmith-4vcpu-ubuntu-2404, target: armv7-unknown-linux-gnueabihf, zigtarget: armv7-unknown-linux-gnueabihf.2.17, plat: manylinux_2_17_armv7l, zig: true, native: false }
-          # Linux musl / Alpine. crt-static is musl's default, and rustc
-          # silently *drops* cdylib output under it (a warning, not an error)
-          # since a fully-static binary can't also be a shared library —
-          # -C target-feature=-crt-static switches to dynamic linking against
-          # musl libc so a real cdylib gets produced.
-          - { os: blacksmith-4vcpu-ubuntu-2404, target: x86_64-unknown-linux-musl, zigtarget: x86_64-unknown-linux-musl, plat: musllinux_1_2_x86_64, zig: true, native: false, rustflags: "-C target-feature=-crt-static" }
-          - { os: blacksmith-4vcpu-ubuntu-2404, target: aarch64-unknown-linux-musl, zigtarget: aarch64-unknown-linux-musl, plat: musllinux_1_2_aarch64, zig: true, native: false, rustflags: "-C target-feature=-crt-static" }
-          - { os: blacksmith-4vcpu-ubuntu-2404, target: armv7-unknown-linux-musleabihf, zigtarget: armv7-unknown-linux-musleabihf, plat: musllinux_1_2_armv7l, zig: true, native: false, rustflags: "-C target-feature=-crt-static" }
-          # macOS. Both build on the Blacksmith macOS 15 Apple Silicon runner.
-          # The Apple toolchain
-          # cross-links x86_64 Mach-O natively, so the Intel wheel is a cross
-          # build (native: false -> content-verified, not import-smoked, since
-          # an x86_64 lib can't be imported on the arm64 runner).
-          - { os: blacksmith-6vcpu-macos-15, target: x86_64-apple-darwin, plat: macosx_10_12_x86_64, zig: false, native: false, deployment: "10.12" }
-          - { os: blacksmith-6vcpu-macos-15, target: aarch64-apple-darwin, plat: macosx_11_0_arm64, zig: false, native: true, deployment: "11.0" }
-          # Windows x64 (native), x86 and arm64 (cross-compiled).
-          - { os: blacksmith-4vcpu-windows-2025, target: x86_64-pc-windows-msvc, plat: win_amd64, zig: false, native: true }
-          - { os: blacksmith-4vcpu-windows-2025, target: i686-pc-windows-msvc, plat: win32, zig: false, native: false }
-          - { os: blacksmith-4vcpu-windows-2025, target: aarch64-pc-windows-msvc, plat: win_arm64, zig: false, native: false }
+  build:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Full history and tags: the distribution version is derived
-          # from the latest `xyg-v*` tag, and a shallow clone has none.
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
-      - name: Install JS build toolchain
-        run: npm ci
-      - name: Cross-compile the native core (zig)
-        if: matrix.zig
-        env:
-          RUSTFLAGS: ${{ matrix.rustflags }}
+      - name: Build native core and client
         run: |
-          uv tool install cargo-zigbuild
-          uv tool run cargo-zigbuild build --release --target ${{ matrix.zigtarget }}
-      - name: Compile the native core
-        if: ${{ !matrix.zig }}
+          cargo build --release
+          npm ci
+          node js/build.mjs
+      - name: Build distributions
         env:
-          # macOS min-version floor for the produced Mach-O; empty (Windows
-          # entries have no deployment key) is ignored by the MSVC toolchain.
-          MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment }}
-        run: cargo build --release --target ${{ matrix.target }}
-      - name: Build the platform wheel
-        shell: bash
-        env:
-          # The core is prebuilt above; the hook packs it and stamps the
-          # platform tag, and builds the render client (node) into the wheel.
-          # The client is required by default; REQUIRE_CARGO also forbids the
-          # core from silently going missing.
           XYG_REQUIRE_CARGO: "1"
-          XYG_SKIP_CARGO: "1"
-          XYG_CARGO_TARGET: ${{ matrix.target }}
-          XYG_WHEEL_PLATFORM: ${{ matrix.plat }}
-        run: uv build --wheel
-      - name: Verify wheel contents
-        shell: bash
         run: |
-          whl=$(ls dist/*.whl)
-          python scripts/verify_wheel.py "$whl" --expect-native
-      - name: Install-size budget (<= 15 MB)
-        shell: bash
+          uv build
+          uv tool run --from auditwheel --with patchelf auditwheel repair dist/*.whl --plat manylinux_2_39_x86_64 --only-plat -w repaired
+          rm dist/*.whl
+          cp repaired/*.whl dist/
+      - name: Verify archives and size
         run: |
-          whl=$(ls dist/*.whl)
-          size=$(wc -c < "$whl" | tr -d ' ')
-          echo "wheel size: $size bytes ($whl)"
-          test "$size" -le 15728640
-      - name: Verify the wheel installs and loads the native core
-        # Only host-arch wheels can be imported on the runner; cross-compiled
-        # arches (aarch64/armv7/win-arm64/win32) are content-verified instead.
-        if: matrix.native
-        shell: bash
+          python3 scripts/verify_wheel.py dist/*.whl --expect-native
+          python3 scripts/verify_sdist.py dist/*.tar.gz
+          uv tool run --from twine twine check --strict dist/*
+          test "$(stat -c %s dist/*.whl)" -le 15728640
+      - name: Prove clean wheel and source installs
+        env:
+          XYG_REQUIRE_CARGO: "1"
         run: |
-          uv venv smoke
-          uv pip install -p smoke dist/*.whl numpy anywidget "reflex>=0.9.6"
-          ./smoke/bin/python -c "import importlib.metadata as m, reflex_xy, xyg.kernels as k; assert k.BACKEND=='native', k.BACKEND; assert reflex_xy.__version__ == m.version('xyg'); print('native', k.__file__)" \
-            || ./smoke/Scripts/python.exe -c "import importlib.metadata as m, reflex_xy, xyg.kernels as k; assert k.BACKEND=='native', k.BACKEND; assert reflex_xy.__version__ == m.version('xyg'); print('native')"
-      - name: Prove plain Python wheel needs no optional host framework
-        if: matrix.native
-        shell: bash
-        run: |
-          uv venv plain-smoke
-          uv pip install -p plain-smoke dist/*.whl
           cp scripts/plain_python_smoke.py "$RUNNER_TEMP/plain-python-smoke.py"
-          (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/plain-smoke/bin/python" -I plain-python-smoke.py) \
-            || (cd "$RUNNER_TEMP" && "$GITHUB_WORKSPACE/plain-smoke/Scripts/python.exe" -I plain-python-smoke.py)
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          uv venv /tmp/xyg-wheel-smoke
+          uv pip install -p /tmp/xyg-wheel-smoke dist/*.whl
+          /tmp/xyg-wheel-smoke/bin/python "$RUNNER_TEMP/plain-python-smoke.py"
+          uv venv /tmp/xyg-source-smoke
+          uv pip install --no-cache -p /tmp/xyg-source-smoke dist/*.tar.gz
+          /tmp/xyg-source-smoke/bin/python "$RUNNER_TEMP/plain-python-smoke.py"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: dist-${{ matrix.plat }}
-          path: dist/*.whl
-
-  # PyEmscripten WASM wheel for in-browser CPython. The platform ABI is
-  # compiler-sensitive, so keep Rust, Emscripten, cibuildwheel, the wheel tag,
-  # and the runtime probe pinned as one tested set
-  # (see spec/process/production-readiness.md).
-  wasm:
-    name: Wheel PyEmscripten (runtime verified)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Full history and tags: the distribution version is derived
-          # from the latest `xyg-v*` tag, and a shallow clone has none.
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        with:
-          toolchain: 1.96.0
-          targets: wasm32-unknown-emscripten
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      - name: Install JS build toolchain
-        run: npm ci
-      # cibuildwheel installs the Pyodide 314 cross-environment and its patched
-      # Emscripten 5.0.3 toolchain before CIBW_BEFORE_BUILD_PYODIDE runs. Build
-      # the standalone Rust cdylib there, then tell the Hatch hook to package
-      # that prebuilt artifact rather than invoke Cargo a second time.
-      - name: Build the PyEmscripten wheel
-        uses: pypa/cibuildwheel@294735312765b09d24a2fbec22660ce817587d55 # v4.1.0
-        env:
-          CIBW_PLATFORM: pyodide
-          CIBW_BUILD: cp314-pyodide_wasm32
-          CIBW_PYODIDE_VERSION: "314.0.0"
-          CIBW_BEFORE_BUILD_PYODIDE: >-
-            cargo build --release --target wasm32-unknown-emscripten
-          CIBW_ENVIRONMENT_PYODIDE: >-
-            XYG_REQUIRE_CARGO=1
-            XYG_SKIP_CARGO=1
-            XYG_CARGO_TARGET=wasm32-unknown-emscripten
-            XYG_WHEEL_PLATFORM=pyemscripten_2026_0_wasm32
-            RUSTFLAGS="-C panic=abort"
-      - name: Verify wheel contents
-        shell: bash
-        run: |
-          whl=$(ls wheelhouse/*.whl)
-          python scripts/verify_wheel.py "$whl" --expect-native
-      # "Builds" is not "loads": install the exact wheel in a real Pyodide 314
-      # runtime and call both the C ABI version function and a native kernel.
-      - name: PyEmscripten runtime load probe
-        run: |
-          npm i --no-save pyodide@314.0.0
-          whl=$(ls wheelhouse/*.whl)
-          python scripts/pyodide_load_smoke.py "$whl"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          # PEP 783 makes pyemscripten_* a standard PyPI platform tag. Keeping
-          # this in the dist-* namespace includes it in the trusted-publishing
-          # batch alongside the native wheels and sdist.
-          name: dist-pyemscripten
-          path: wheelhouse/*.whl
-
-  # Build the host-neutral browser package from the same tagged source. This is
-  # release-only (never PR CI): it stages exact semver, all four local assets,
-  # their hashes/version contract, notices, and budgets before npm can see it.
-  browser-package:
-    name: Host-neutral browser package
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        with:
-          toolchain: 1.96.0
-          targets: wasm32-unknown-unknown
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - name: Build direct Rust/WASM and browser assets
-        run: |
-          npm ci
-          cargo build -p xyg-wasm --release --target wasm32-unknown-unknown
-          node js/build.mjs
-          node js/package-wasm.mjs
-      - name: Stage exact-version offline browser package
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/xyg-v* ]]; then
-            version_args=(--tag "$GITHUB_REF_NAME")
-          else
-            version_args=(--version "0.0.0-dryrun.${GITHUB_RUN_NUMBER}")
-          fi
-          python3 scripts/stage_browser_package.py \
-            "${version_args[@]}" \
-            --dist packages/xy-client/dist \
-            --output staged
-      - name: Pack and inspect browser package
-        shell: bash
-        run: |
-          mkdir packed
-          npm pack ./staged/xyg-browser --pack-destination packed
-          npm publish packed/*.tgz --dry-run --tag next --provenance=false
-      - name: Prove clean published browser assets under strict CSP
-        shell: bash
-        run: |
-          mkdir unpacked-browser
-          tar -xzf packed/*.tgz -C unpacked-browser
-          XYG_BROWSER_DIST="$PWD/unpacked-browser/package" node scripts/wasm_foundation_smoke.mjs
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: browser-package
-          path: packed/*.tgz
-
-  sdist:
-    name: sdist
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Full history and tags: the distribution version is derived
-          # from the latest `xyg-v*` tag, and a shallow clone has none.
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
-        with:
-          enable-cache: false
-      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "22"
-      # The build hook builds the render client (node) into the sdist, so
-      # `pip install <sdist>` needs no Node. It builds the Rust core on the
-      # user's machine when a toolchain is present. The smoke below requires
-      # that build and proves the installed native backend loads successfully.
-      - name: Install JS build toolchain
-        run: npm ci
-      - name: Build sdist
-        # The client is required by default, so a published sdist always carries
-        # the prebuilt render client (the build fails otherwise).
-        run: uv build --sdist
-      - name: Verify sdist contents
-        shell: bash
-        run: |
-          sdist=$(ls dist/*.tar.gz)
-          python scripts/verify_sdist.py "$sdist"
-      - name: Build and load native core from sdist
-        shell: bash
-        env:
-          XYG_REQUIRE_CARGO: "1"
-        run: |
-          uv venv smoke-native
-          uv pip install --no-cache -p smoke-native dist/*.tar.gz numpy anywidget "reflex>=0.9.6"
-          ./smoke-native/bin/python - <<'PY'
-          import importlib.metadata as metadata
-
-          import reflex_xy
-          import xyg
-          import xyg.kernels as kernels
-
-          version = metadata.version("xyg")
-          assert xyg.__version__ == version
-          assert reflex_xy.__version__ == version
-          assert kernels.BACKEND == "native", kernels.BACKEND
-          print("sdist built and loaded the native Rust core")
-          PY
-      - name: Verify coreless sdist imports reflex_xy
-        shell: bash
-        env:
-          XYG_SKIP_CARGO: "1"
-        run: |
-          uv venv smoke-no-rust
-          uv pip install --no-cache -p smoke-no-rust dist/*.tar.gz numpy anywidget "reflex>=0.9.6"
-          ./smoke-no-rust/bin/python - <<'PY'
-          import importlib.metadata as metadata
-
-          import reflex_xy
-          import xyg
-
-          version = metadata.version("xyg")
-          assert xyg.__version__ == version
-          assert reflex_xy.__version__ == version
-          try:
-              import xyg.kernels  # noqa: F401
-          except ImportError as err:
-              msg = str(err)
-              assert "native Rust core" in msg, msg
-              assert "rustup.rs" in msg, msg
-              print("coreless sdist imports reflex_xy and errors clearly on compute")
-          else:
-              raise SystemExit("expected ImportError without the native core")
-          PY
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: dist-sdist
-          path: dist/*.tar.gz
-
-  # Reuse the exact native cores already built into the release wheels. This
-  # prevents a second compiler invocation from producing Node packages that
-  # merely share a tag while carrying different bytes (#52).
-  node-native-packages:
-    name: Node native ${{ matrix.platform }}
-    needs: [wheels]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { platform: darwin-arm64, wheel: macosx_11_0_arm64 }
-          - { platform: darwin-x64, wheel: macosx_10_12_x86_64 }
-          - { platform: linux-arm64, wheel: manylinux_2_17_aarch64 }
-          - { platform: linux-x64, wheel: manylinux_2_17_x86_64 }
-          - { platform: win32-x64, wheel: win_amd64 }
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: dist-${{ matrix.wheel }}
-          path: wheel
-      - name: Stage exact-version platform package
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/xyg-v* ]]; then
-            version_args=(--tag "$GITHUB_REF_NAME")
-          else
-            version_args=(--version "0.0.0-dryrun.${GITHUB_RUN_NUMBER}")
-          fi
-          python3 scripts/stage_node_packages.py \
-            "${version_args[@]}" \
-            --output staged \
-            --platform "${{ matrix.platform }}" \
-            --wheel wheel/*.whl
-      - name: Pack and inspect platform package
-        shell: bash
-        run: |
-          mkdir packed
-          npm pack "staged/xyg-node-${{ matrix.platform }}" --pack-destination packed
-          npm publish packed/*.tgz --dry-run --provenance=false
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: node-platform-${{ matrix.platform }}
-          path: packed/*.tgz
-
-  node-facade:
-    name: Node facade
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - name: Build the canonical standalone paint client
-        run: |
-          npm ci
-          node js/build.mjs
-      - name: Stage exact-version facade
-        shell: bash
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/xyg-v* ]]; then
-            version_args=(--tag "$GITHUB_REF_NAME")
-          else
-            version_args=(--version "0.0.0-dryrun.${GITHUB_RUN_NUMBER}")
-          fi
-          python3 scripts/stage_node_packages.py \
-            "${version_args[@]}" \
-            --output staged \
-            --facade \
-            --client packages/xy-client/dist/standalone.js
-      - name: Prove the staged facade resolves its bundled offline client
-        shell: bash
-        run: |
-          test -s staged/xyg-node/client/standalone.js
-          grep -F 'client", "standalone.js' staged/xyg-node/src/html.js
-          mkdir packed
-          npm pack staged/xyg-node --pack-destination packed
-          npm publish packed/*.tgz --dry-run --provenance=false
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: node-facade
-          path: packed/*.tgz
-
-  # Header inspection is not runtime conformance. Install the exact packed
-  # facade/native pair in a new project on each supported architecture, then
-  # load the Rust ABI and exercise figure + offline HTML export without a
-  # repository-relative native lookup (#52).
-  node-clean-install:
-    name: Node clean install ${{ matrix.platform }}
-    needs: [node-native-packages, node-facade]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { platform: darwin-arm64, os: blacksmith-6vcpu-macos-15, node_arch: arm64 }
-          # The Apple Silicon runner executes the x64 Node build under Rosetta,
-          # so process.arch and the loaded Mach-O are both x64.
-          - { platform: darwin-x64, os: blacksmith-6vcpu-macos-15, node_arch: x64 }
-          - { platform: linux-arm64, os: blacksmith-4vcpu-ubuntu-2404-arm, node_arch: arm64 }
-          - { platform: linux-x64, os: blacksmith-4vcpu-ubuntu-2404, node_arch: x64 }
-          - { platform: win32-x64, os: blacksmith-4vcpu-windows-2025, node_arch: x64 }
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          architecture: ${{ matrix.node_arch }}
-          package-manager-cache: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: node-facade
-          path: release-smoke/facade
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: node-platform-${{ matrix.platform }}
-          path: release-smoke/native
-      - name: Clean-install and load exact platform package
-        shell: bash
-        env:
-          XYG_EXPECTED_NODE_PLATFORM: ${{ matrix.platform }}
-        run: |
-          smoke="$RUNNER_TEMP/xyg-node-clean-install"
-          mkdir -p "$smoke"
-          cp scripts/node_release_smoke.mjs "$smoke/release-smoke.mjs"
-          cp release-smoke/facade/*.tgz "$smoke/facade.tgz"
-          cp release-smoke/native/*.tgz "$smoke/native.tgz"
-          export XYG_EXPECTED_ABI="$(node -p "require('./spec/abi/xyg-abi.json').abi_version")"
-          cd "$smoke"
-          mkdir unpacked
-          tar -xzf facade.tgz -C unpacked
-          node --input-type=module -e 'const { resolveNativeLibrary } = await import("./unpacked/package/src/native-path.js"); const requireFn = { resolve() { const error = new Error("not installed"); error.code = "MODULE_NOT_FOUND"; throw error } }; try { resolveNativeLibrary({ env: {}, requireFn }); throw new Error("missing platform package unexpectedly loaded") } catch (error) { if (!String(error.message).includes("Expected optional dependency @curatelabs/xyg-node-")) throw error; console.log(error.message) }'
-          npm init --yes
-          npm install --no-audit --no-fund "$smoke/facade.tgz" "$smoke/native.tgz"
-          node release-smoke.mjs | tee conformance.json
-          test -s conformance.json
-
-  node-unsupported-windows-arm64:
-    name: Node explicit unsupported Windows arm64
-    needs: [node-facade]
-    runs-on: blacksmith-4vcpu-windows-2025
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: node-facade
-          path: release-smoke/facade
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - name: Prove Windows arm64 fails before native discovery
-        shell: bash
-        run: |
-          smoke="$RUNNER_TEMP/xyg-node-windows-arm64"
-          mkdir -p "$smoke"
-          cp release-smoke/facade/*.tgz "$smoke/facade.tgz"
-          cd "$smoke"
-          tar -xzf facade.tgz
-          node --input-type=module -e 'const { resolveNativeLibrary } = await import("./package/src/native-path.js"); const requireFn = { resolve() { throw new Error("optional package resolution must not run") } }; try { resolveNativeLibrary({ platform: "win32", arch: "arm64", env: {}, requireFn }); throw new Error("Windows arm64 unexpectedly accepted") } catch (error) { const message = String(error.message); if (!message.includes("XYG Node does not support Windows arm64") || !message.includes("Remediation:")) throw error; console.log(message) }'
-
-  release-cohort-linux-x64:
-    name: Exact release cohort (Linux x64)
-    needs: [wheels, browser-package, node-native-packages, node-facade, node-clean-install]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v6.0.0
-        with:
-          python-version: "3.13"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24"
-          package-manager-cache: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: dist-manylinux_2_17_x86_64
-          path: cohort/python
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: node-facade
-          path: cohort/facade
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: node-platform-linux-x64
-          path: cohort/native
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: browser-package
-          path: cohort/browser
-      - name: Bind exact Python, Node, and browser artifact bytes
-        if: startsWith(github.ref, 'refs/tags/xyg-v')
-        shell: bash
-        run: |
-          python3 scripts/verify_release_cohort.py \
-            --tag "$GITHUB_REF_NAME" \
-            --commit "$GITHUB_SHA" \
-            --wheel cohort/python/*.whl \
-            --node-facade cohort/facade/*.tgz \
-            --node-native cohort/native/*.tgz \
-            --browser cohort/browser/*.tgz \
-            --output release-conformance-linux-x64.json
-      - name: Clean downstream consumer installs exact cohort
-        shell: bash
-        run: |
-          consumer="$RUNNER_TEMP/xyg-release-cohort-consumer"
-          python3 -m venv "$consumer/venv"
-          "$consumer/venv/bin/pip" install --no-index cohort/python/*.whl
-          "$consumer/venv/bin/python" -c 'import xyg; assert xyg.__name__ == "xyg"'
-          mkdir -p "$consumer/npm"
-          cd "$consumer/npm"
-          npm init --yes
-          npm install --no-audit --no-fund "$GITHUB_WORKSPACE"/cohort/{facade,native,browser}/*.tgz
-          node --input-type=module -e 'await import("@curatelabs/xyg-node"); const url = import.meta.resolve("@curatelabs/xyg/xyg-wasm.wasm"); if (!url.startsWith("file:")) throw new Error(`XYG browser asset did not resolve locally: ${url}`); console.log("clean XYG cohort consumer OK")'
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: startsWith(github.ref, 'refs/tags/xyg-v')
-        with:
-          name: release-conformance-linux-x64
-          path: release-conformance-linux-x64.json
-          retention-days: 30
-
-  publish-npm:
-    name: Publish XYG Node packages to npm
-    # PyPI runs the shared tag/CHANGELOG/name gates first. npm cannot publish a
-    # partial Node-only version that lacks its aligned Python artifact.
-    needs: [node-native-packages, node-facade, publish]
-    if: github.repository == 'CurateLabs/xyg'
-    runs-on: ubuntu-latest
-    environment: npm
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          # npm trusted publishing requires Node >=22.14 and npm >=11.5.1.
-          node-version: "24"
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-      - name: Use an npm CLI with trusted-publishing support
-        run: npm install --global npm@^11.5.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: node-dist
-          pattern: node-*
-      - name: Verify complete immutable Node package set
-        shell: bash
-        run: |
-          test "$(find node-dist -name '*.tgz' -type f | wc -l | tr -d ' ')" = 6
-          for artifact in $(find node-dist -name '*.tgz' -type f | sort); do
-            npm publish "$artifact" --dry-run --provenance=false
-          done
-      - name: Publish platform packages before the facade (OIDC)
-        if: vars.XYG_ALLOW_PYPI_PUBLISH == 'true' && vars.XYG_ALLOW_NPM_PUBLISH == 'true' && startsWith(github.ref, 'refs/tags/xyg-v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true')
-        shell: bash
-        run: python3 scripts/publish_node_packages.py node-dist
-      - name: Dry-run or disabled-publish summary
-        if: vars.XYG_ALLOW_PYPI_PUBLISH != 'true' || vars.XYG_ALLOW_NPM_PUBLISH != 'true' || !startsWith(github.ref, 'refs/tags/xyg-v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true')
-        run: echo "Built and verified all six XYG Node packages; npm publication is disabled for this run."
-
+          name: first-alpha-distributions
+          path: dist/*
+          if-no-files-found: error
   publish:
-    name: Publish to PyPI
-    # Publishing requires the runtime-verified PyEmscripten job to pass. Its
-    # PEP 783 wheel uses a standard PyPI platform tag and joins the same
-    # trusted-publishing batch as the native wheels and sdist.
-    needs: [wheels, sdist, wasm, browser-package, node-native-packages, node-facade, node-clean-install, node-unsupported-windows-arm64, release-cohort-linux-x64]
-    # Repository guard (#13): only CurateLabs/xyg may reach the OIDC publish
-    # job. Forks and mirrors stop here. PyPI trusted publishing is bound to
-    # this slug, workflow filename publish.yaml, and environment `pypi`.
-    if: github.repository == 'CurateLabs/xyg'
+    needs: build
+    if: github.repository == 'CurateLabs/xyg' && github.ref == 'refs/tags/xyg-v0.0.1a1' && vars.XYG_ALLOW_PYPI_PUBLISH == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: pypi
     permissions:
       contents: read
-      id-token: write # PyPI trusted publishing (OIDC) — no API token stored
+      id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          # Full history and tags: the distribution version is derived
-          # from the latest `xyg-v*` tag, and a shallow clone has none.
           fetch-depth: 0
-      # workflow_dispatch is useful for a dry-run matrix, but turning dry_run
-      # off must not turn an arbitrary branch build into a release. Dispatch a
-      # real publish against the already-created release tag.
-      - name: Real publish must run from an XYG release tag
-        if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
-        run: |
-          case "$GITHUB_REF" in
-            refs/tags/xyg-v*) ;;
-            *)
-              echo "::error::real publishing requires refs/tags/xyg-v*, got $GITHUB_REF"
-              exit 1
-              ;;
-          esac
-      # The tag now *is* the version (pyproject derives it), so there is no
-      # second number left to disagree with it. What a tag can't vouch for is
-      # that the release was written up: this gate requires the tag to be shaped
-      # like a release tag and CHANGELOG.md to carry a dated entry for it.
-      - name: Release version gate (tag == CHANGELOG)
-        if: github.event_name == 'push' || github.event.inputs.dry_run != 'true'
-        run: python3 scripts/check_release_version.py
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - run: python3 scripts/check_release_version.py
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
+          name: first-alpha-distributions
           path: dist
-          pattern: dist-*
-          merge-multiple: true
-      - name: List artifacts
-        run: ls -la dist/
-      # A manual workflow_dispatch defaults to dry_run=true: every wheel/sdist/
-      # wasm artifact is built and verified above, but nothing is uploaded to
-      # PyPI. Use this to validate the full cross-compile matrix before a real
-      # version-tag release. A real publish additionally requires the fork
-      # guards below.
-      - name: Dry run summary (no PyPI publish)
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.dry_run == 'true'
+      - name: Require exact package identity and version
         run: |
-          echo "::notice::Dry run — built and verified $(ls dist/*.whl dist/*.tar.gz 2>/dev/null | wc -l | tr -d ' ') artifacts across the full release matrix. Skipping PyPI publish."
-          echo "Re-run this workflow against an existing xyg-v* tag with dry_run=false, or push a new xyg-v* tag, to publish for real."
-      # Publish-name guard (#13): real uploads must be distribution `xyg`
-      # (the pending PyPI project) and must never be upstream's `xy`. Dry
-      # runs skip the check so the cross-compile matrix stays verifiable.
-      - name: Fork publish guard (refuse upstream's PyPI package name)
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          DRY_RUN: ${{ github.event.inputs.dry_run }}
-        run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$DRY_RUN" = "true" ]; then
-            echo "Dry run — nothing will be uploaded, name guard not enforced."
-            exit 0
-          fi
-          for artifact in dist/*.whl dist/*.tar.gz; do
-            name="$(basename "$artifact")"
-            name="${name%%-*}"
-            if [ "$name" = "xy" ]; then
-              echo "::error::Refusing to publish distribution 'xy' — that is upstream reflex-dev's PyPI package (CurateLabs/xyg#13)."
-              exit 1
-            fi
-            if [ "$name" != "xyg" ]; then
-              echo "::error::Refusing to publish distribution '$name' — this repository publishes PyPI project 'xyg' only (CurateLabs/xyg#13)."
-              exit 1
-            fi
-          done
-          echo "Fork publish guard OK: artifacts are named xyg."
-      # The upload itself needs an explicit opt-in on top of everything above:
-      # the XYG_ALLOW_PYPI_PUBLISH repository variable does not exist by
-      # default, so a fresh clone of this fork cannot publish no matter what
-      # it tags or dispatches.
-      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
-        if: vars.XYG_ALLOW_PYPI_PUBLISH == 'true' && startsWith(github.ref, 'refs/tags/xyg-v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true')
+          python3 - <<'PY'
+          from pathlib import Path
+          files = sorted(Path('dist').iterdir())
+          assert len(files) == 2, files
+          assert any(p.name == 'xyg-0.0.1a1.tar.gz' for p in files), files
+          assert all(p.name.startswith('xyg-0.0.1a1') for p in files), files
+          PY
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
         with:
           packages-dir: dist/
-          # A failed upload can leave a partial release on immutable PyPI.
-          # Retrying the same tag should skip files that were already accepted.
           skip-existing: true
-
-  github-release:
-    name: Create GitHub Release
-    needs: [publish, publish-npm]
-    if: vars.XYG_ALLOW_PYPI_PUBLISH == 'true' && vars.XYG_ALLOW_NPM_PUBLISH == 'true' && startsWith(github.ref, 'refs/tags/xyg-v') && (github.event_name != 'workflow_dispatch' || github.event.inputs.dry_run != 'true')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    permissions:
-      contents: write
-    steps:
-      # The browser-runtime wheel is useful outside pip and is the artifact the
-      # docs promotion contract promises on the matching GitHub Release. Native
-      # wheels and the sdist remain authoritative on PyPI.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: release-dist
-          pattern: dist-pyemscripten
-          merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          path: release-dist
-          pattern: browser-package
-          merge-multiple: true
-      - name: Create release and attach browser artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-dist/*.whl release-dist/*.tgz --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes

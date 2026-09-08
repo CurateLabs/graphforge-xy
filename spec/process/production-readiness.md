@@ -6,6 +6,30 @@ API stability do not depend on memory or vibes.
 
 ## Current Contract
 
+### First alpha bootstrap: 0.0.1a1
+
+The isolated `feature/pypi-first-alpha` release branch publishes the first
+experimental PyPI distribution from product revision
+`c2f30dd813100ce22c7fb86061f893d1578cf08e`, whose complete CI run passed:
+https://github.com/CurateLabs/xyg/actions/runs/33927590522.
+Product code and benchmark evidence are unchanged from that revision.
+
+This initial release has a limited artifact contract: one
+auditwheel-repaired Linux x86-64 wheel (glibc 2.39+) and one source archive.
+Both include the offline client; source installation requires Rust.
+Archive verifiers, wheel-size budget, strict distribution metadata checks,
+and isolated wheel/source installs with native chart-to-HTML smoke tests
+must pass before upload. The full platform, Pyodide, and npm release matrix
+below remains the target for subsequent releases, not a claim for this alpha.
+
+The branch-local `publish.yaml` only uploads tag `xyg-v0.0.1a1`, requires
+the exact `xyg` name/version and dated changelog, and retains the repository,
+`pypi` environment, OIDC, explicit publish-variable, and dry-run guards.
+It does not replace the full release workflow on `main`. Reproduce the
+artifact rehearsal by dispatching that branch with `dry_run=true`; publish
+the verified tag with `dry_run=false` and `XYG_ALLOW_PYPI_PUBLISH=true`.
+Install this prerelease explicitly with `pip install xyg==0.0.1a1`.
+
 XYG is early alpha. The goal is Plotly-class chart breadth with a
 screen-bounded performance core, but the stable commitments today are narrower:
 
