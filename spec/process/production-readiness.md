@@ -6,7 +6,7 @@ API stability do not depend on memory or vibes.
 
 ## Current Contract
 
-### First alpha bootstrap: 0.0.1a1
+### First alpha bootstrap: 0.0.1a2
 
 The isolated `feature/pypi-first-alpha` release branch publishes the first
 experimental PyPI distribution from product revision
@@ -22,13 +22,17 @@ and isolated wheel/source installs with native chart-to-HTML smoke tests
 must pass before upload. The full platform, Pyodide, and npm release matrix
 below remains the target for subsequent releases, not a claim for this alpha.
 
-The branch-local `publish.yaml` only uploads tag `xyg-v0.0.1a1`, requires
+The branch-local `publish.yaml` only uploads tag `xyg-v0.0.1a2`, requires
 the exact `xyg` name/version and dated changelog, and retains the repository,
 `pypi` environment, OIDC, explicit publish-variable, and dry-run guards.
 It does not replace the full release workflow on `main`. Reproduce the
 artifact rehearsal by dispatching that branch with `dry_run=true`; publish
 the verified tag with `dry_run=false` and `XYG_ALLOW_PYPI_PUBLISH=true`.
-Install this prerelease explicitly with `pip install xyg==0.0.1a1`.
+The unpublished `xyg-v0.0.1a1` attempt failed in the publishing tool's
+metadata parser. The `0.0.1a2` retry pins pypa/gh-action-pypi-publish v1.14.2
+(`dc37677b2e1c63e2034f94d8a5b11f265b73ba33`), which supports metadata 2.5.
+
+Install this prerelease explicitly with `pip install xyg==0.0.1a2`.
 
 XYG is early alpha. The goal is Plotly-class chart breadth with a
 screen-bounded performance core, but the stable commitments today are narrower:

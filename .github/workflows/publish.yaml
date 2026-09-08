@@ -3,7 +3,7 @@ name: First PyPI alpha
 # Branch-local bootstrap; this filename and environment bind the PyPI publisher.
 on:
   push:
-    tags: ["xyg-v0.0.1a1"]
+    tags: ["xyg-v0.0.1a2"]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -61,7 +61,7 @@ jobs:
           if-no-files-found: error
   publish:
     needs: build
-    if: github.repository == 'CurateLabs/xyg' && github.ref == 'refs/tags/xyg-v0.0.1a1' && vars.XYG_ALLOW_PYPI_PUBLISH == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false)
+    if: github.repository == 'CurateLabs/xyg' && github.ref == 'refs/tags/xyg-v0.0.1a2' && vars.XYG_ALLOW_PYPI_PUBLISH == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run == false)
     runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: pypi
     permissions:
@@ -82,10 +82,10 @@ jobs:
           from pathlib import Path
           files = sorted(Path('dist').iterdir())
           assert len(files) == 2, files
-          assert any(p.name == 'xyg-0.0.1a1.tar.gz' for p in files), files
-          assert all(p.name.startswith('xyg-0.0.1a1') for p in files), files
+          assert any(p.name == 'xyg-0.0.1a2.tar.gz' for p in files), files
+          assert all(p.name.startswith('xyg-0.0.1a2') for p in files), files
           PY
-      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
         with:
           packages-dir: dist/
           skip-existing: true
